@@ -133,11 +133,13 @@ async function ensureExpanded(page: Page, column: Locator): Promise<void> {
   await column.locator('[data-sidebar-right-open]').waitFor({ timeout: 10_000 })
 }
 
-/** Clear only this fixture's saved layouts before an independent gesture case. */
+/** Clear this fixture's saved layouts and dragged widths before an independent gesture case. */
 async function resetSidebar(page: Page): Promise<Locator> {
   await page.evaluate(() => {
     for (const key of Object.keys(localStorage)) {
-      if (key.startsWith('dsh.sidebar-right.v1.')) localStorage.removeItem(key)
+      // Dragged panel widths survive a reload, so a case that widened the frame
+      // would otherwise hand its geometry to the next one.
+      if (key.startsWith('dsh.sidebar-right.v1.') || key.startsWith('dsh.layout.')) localStorage.removeItem(key)
     }
   })
   await page.reload({ waitUntil: 'load' })

@@ -146,6 +146,8 @@ function drag(handle: Element, fromX: number, toX: number): void {
 }
 
 beforeEach(() => {
+  // Dragged widths survive a reload, so each case starts from an empty store.
+  localStorage.clear()
   originalTitle = document.title
   frameWidth = 1920
   selectedSession = 's-test' as SessionId

@@ -3,9 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createLayoutStore } from '../src/client/stores.ts'
 import type { MainPanelId } from '../src/client/service.ts'
+import { RIGHTBAR_WIDTH_KEY, SIDEBAR_WIDTH_KEY } from '../src/client/width-persistence.ts'
 
-beforeEach(() => { vi.stubGlobal('innerWidth', 1920) })
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+beforeEach(() => {
+  vi.stubGlobal('innerWidth', 1920)
+  localStorage.clear()
+})
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear() })
 
 describe('createLayoutStore', () => {
   it('starts with the default sidebar and no right panel preference', () => {
@@ -25,15 +29,98 @@ describe('createLayoutStore', () => {
     })
   })
 
-  it('creates independent instances without browser persistence', () => {
-    const write = vi.spyOn(Storage.prototype, 'setItem')
+  it('creates independent instances with no shared state', () => {
     const a = createLayoutStore().create()
     const b = createLayoutStore().create()
     a.actions.setSidebar(400)
     a.actions.openRightbar(true, false)
     expect(b.store.getSnapshot().layoutInfo.sidebar).toBe(280)
     expect(b.store.getSnapshot().layoutInfo.rightbar).toBeNull()
-    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('remembers dragged widths for the next page load', () => {
+    const first = createLayoutStore().create()
+    first.actions.openRightbar(true, false)
+    first.actions.setSidebar(360)
+    first.actions.setRightbar(640)
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe('360')
+    expect(localStorage.getItem(RIGHTBAR_WIDTH_KEY)).toBe('640')
+    const reloaded = createLayoutStore().create()
+    expect(reloaded.store.getSnapshot().layoutInfo).toMatchObject({ sidebar: 360, rightbar: 640 })
+  })
+
+  it('opens the right panel at the remembered width instead of the 45% default', () => {
+    localStorage.setItem(RIGHTBAR_WIDTH_KEY, '820')
+    const { store, actions } = createLayoutStore().create()
+    actions.openRightbar(true, false)
+    expect(store.getSnapshot().layoutInfo.rightbar).toBe(820)
+  })
+
+  it('does not remember a closed sidebar or an unwritten default', () => {
+    const { actions } = createLayoutStore().create()
+    actions.setSidebar(360)
+    actions.toggleSidebar()
+    actions.toggleSidebar()
+    actions.toggleSidebar()
+    // The toggle wrote 0 and the contract default to the state, never to storage.
+    expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe('360')
+    expect(createLayoutStore().create().store.getSnapshot().layoutInfo.sidebar).toBe(360)
+  })
+
+  it('does not remember the right panel default it seeds on first opening', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.openRightbar(true, false)
+    // 45% of the 1920px frame, seeded in memory only.
+    expect(store.getSnapshot().layoutInfo.rightbar).toBe(864)
+    expect(localStorage.getItem(RIGHTBAR_WIDTH_KEY)).toBeNull()
+    expect(createLayoutStore().create().store.getSnapshot().layoutInfo.rightbar).toBeNull()
+  })
+
+  it('ignores an unreadable or non-positive remembered width', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, 'not-a-width')
+    localStorage.setItem(RIGHTBAR_WIDTH_KEY, '0')
+    const { store } = createLayoutStore().create()
+    expect(store.getSnapshot().layoutInfo).toMatchObject({ sidebar: 280, rightbar: null })
+  })
+
+  it('clamps a remembered width into its drag range', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, '9999')
+    localStorage.setItem(RIGHTBAR_WIDTH_KEY, '40')
+    const { store } = createLayoutStore().create()
+    expect(store.getSnapshot().layoutInfo).toMatchObject({ sidebar: 420, rightbar: 300 })
+  })
+
+  it('falls back to its defaults when reading storage throws', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    expect(createLayoutStore().create().store.getSnapshot().layoutInfo).toMatchObject({ sidebar: 280, rightbar: null })
+  })
+
+  it('falls back to its defaults when the storage property itself throws', () => {
+    // A browser blocking site data throws SecurityError from the accessor, before
+    // any method call; the frame must still boot.
+    vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => { throw new Error('SecurityError') })
+    const { store, actions } = createLayoutStore().create()
+    expect(store.getSnapshot().layoutInfo).toMatchObject({ sidebar: 280, rightbar: null })
+    actions.setSidebar(360)
+    expect(store.getSnapshot().layoutInfo.sidebar).toBe(360)
+  })
+
+  it('applies the drag when storage rejects the write', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage full') })
+    const { store, actions } = createLayoutStore().create()
+    actions.setSidebar(360)
+    expect(store.getSnapshot().layoutInfo.sidebar).toBe(360)
+    expect(consoleError).toHaveBeenCalledWith('Panel width persistence failed:', expect.any(Error))
+  })
+
+  it('works without browser storage at all', () => {
+    vi.stubGlobal('localStorage', undefined)
+    const { store, actions } = createLayoutStore().create()
+    actions.setSidebar(360)
+    actions.openRightbar(true, false)
+    actions.setRightbar(600)
+    expect(store.getSnapshot().layoutInfo).toMatchObject({ sidebar: 360, rightbar: 600 })
   })
 
   it('clamps the sidebar to 264–420px', () => {

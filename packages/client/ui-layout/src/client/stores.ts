@@ -8,10 +8,12 @@ import {
   clampWidth, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN,
   SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT, SIDEBAR_DRAWER_BREAKPOINT, SIDEBAR_MAX, SIDEBAR_MIN,
 } from './columns.ts'
+import { readPanelWidth, RIGHTBAR_WIDTH_KEY, SIDEBAR_WIDTH_KEY, writePanelWidth } from './width-persistence.ts'
 
 /**
- * Transient layout preferences. Responsive concessions never rewrite widths;
- * the right panel's expanded state belongs to its occupant.
+ * Layout preferences. Responsive concessions never rewrite widths, and the
+ * right panel's expanded state belongs to its occupant; the two dragged widths
+ * are the only facts here that outlive the page (width-persistence.ts).
  */
 type LayoutState = {
   panelInfo: {
@@ -27,8 +29,9 @@ type LayoutInfo = {
   viewportWidth: number
   narrowExpanded: boolean
   /**
-   * Saved right panel width in px, or null before its first opening. Resizing
-   * the frame and closing the panel preserve this preference.
+   * Right panel width in px, or null before its first opening. Resizing the
+   * frame and closing the panel preserve this preference; a drag also restores
+   * it after a reload.
    */
   rightbar: number | null
   /**
@@ -69,9 +72,10 @@ type LayoutActions = {
 /**
  * Create the layout panel store handle. For the sidebar the preference IS the
  * width, so closing it forgets its drag width — reopening restores the contract
- * default. The right panel initializes at 45% of the frame on first opening
- * and keeps that px preference across resizes and close. Drag writes clamp to
- * the current frame's range. Narrow sidebar toggles change only the expansion
+ * default. A reload restores whichever width a drag last left, for both panels;
+ * the right panel opens at 45% of the frame until a drag replaces that default,
+ * and keeps its px preference across resizes and close. Drag writes clamp to the
+ * current frame's range. Narrow sidebar toggles change only the expansion
  * override; opening the right panel clears that override.
  * @returns the store handle (spec + type + identity + factory in one).
  */
@@ -80,10 +84,10 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
     init: (): LayoutState => ({
       panelInfo: { activePanelId: null },
       layoutInfo: {
-        sidebar: SIDEBAR_DEFAULT,
+        sidebar: readPanelWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_MIN, SIDEBAR_MAX) ?? SIDEBAR_DEFAULT,
         viewportWidth: window.innerWidth,
         narrowExpanded: false,
-        rightbar: null,
+        rightbar: readPanelWidth(RIGHTBAR_WIDTH_KEY, RIGHTBAR_MIN, Number.POSITIVE_INFINITY) ?? null,
         rightbarShown: false,
         rightbarTrack: false,
         rightbarFullscreen: false,
@@ -100,9 +104,12 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
           d.panelInfo.activePanelId = null
         }
       },
+      // Drag writes are the only width changes a reload restores: open/close and
+      // responsive concessions answer the current frame, not a preference.
       setSidebar: (d, px: number) => {
         d.layoutInfo.rightbarInstant = false
         d.layoutInfo.sidebar = clampWidth(px, SIDEBAR_MIN, SIDEBAR_MAX)
+        writePanelWidth(SIDEBAR_WIDTH_KEY, d.layoutInfo.sidebar)
       },
       // Narrow toggles flip only the override: the width preference survives
       // untouched, so re-widening restores the pre-squeeze layout.
@@ -125,6 +132,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       setRightbar: (d, px: number) => {
         d.layoutInfo.rightbarInstant = false
         d.layoutInfo.rightbar = clampWidth(px, RIGHTBAR_MIN, Math.max(RIGHTBAR_MIN, d.layoutInfo.viewportWidth * RIGHTBAR_MAX_RATIO))
+        writePanelWidth(RIGHTBAR_WIDTH_KEY, d.layoutInfo.rightbar)
       },
       openRightbar: (d, track: boolean, fullscreen: boolean) => {
         if (!d.layoutInfo.rightbarShown || d.layoutInfo.rightbarTrack !== track || d.layoutInfo.rightbarFullscreen !== fullscreen) {

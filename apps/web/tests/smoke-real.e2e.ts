@@ -855,7 +855,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || notReady.length > 0)('web smoke
     await screen(page, '09-details-closed')
   }, 150_000)
 
-  it('sidebar drag widens the column and resets across reload', async () => {
+  it('sidebar drag widens the column and keeps the width across reload', async () => {
     onTestFailed(() => saveFailureShot(page, 'w5-drag'))
     const before = await firstTrack(page)
     const handle = page.locator('[class*="handle"]').first()
@@ -868,6 +868,14 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || notReady.length > 0)('web smoke
     const after = await firstTrack(page)
     expect(after).not.toBe(before)
     await screen(page, '10-sidebar-dragged')
+    await page.reload({ waitUntil: 'load' })
+    await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
+    // A dragged width is one frame-wide preference; the reload restores it.
+    expect(await firstTrack(page)).toBe(after)
+    // Later cases in this shared page expect the documented 280px column, so the
+    // preference must go: only a drag writes it, and removing the entry is what a
+    // reader without the gesture has.
+    await page.evaluate(() => { localStorage.removeItem('dsh.layout.sidebar-width.v1') })
     await page.reload({ waitUntil: 'load' })
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
     expect(await firstTrack(page)).toBe(before)

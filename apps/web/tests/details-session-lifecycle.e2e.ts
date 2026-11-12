@@ -273,6 +273,10 @@ describe.skipIf(MODE === 'record')('web e2e: details panel follows the current S
     await expect.poll(() => sidebarTrack(page), { timeout: 5_000 }).toBe(sidebarBefore + 70)
 
     const warningStart = tripwire.warnings.length
+    // The gesture above proves the frame follows the drag; this reload exercises
+    // layout recovery, not width persistence (the layout store specs own that), so
+    // the remembered width is dropped to keep the recovered 280px baseline.
+    await page.evaluate(() => { localStorage.removeItem('dsh.layout.sidebar-width.v1') })
     await page.reload({ waitUntil: 'load' })
     acknowledgeReloadConnectionLoss(tripwire, warningStart)
     await appFrame(page).waitFor({ timeout: 30_000 })
