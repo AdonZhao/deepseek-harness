@@ -1,5 +1,6 @@
 /** Host registry and HTTP adapter for generic Connection RPC channels. */
 
+import type { IncomingMessage, ServerResponse as NodeServerResponse } from 'node:http'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { PeerId, PeerScope, Principal } from '@deepseek-ai/dsh-typert-protocol'
@@ -14,6 +15,7 @@ import { bridge } from './http-bridge.ts'
 import { isRemoteAuthority, isTrustedApiRequest } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
 import type { BrowserAuth } from './browser-auth.ts'
+import { readLoginForm, type PasswordLogin } from './password-login.ts'
 import { Peer } from './peer.ts'
 import type {
   PeerAdmission,
@@ -83,11 +85,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
    * @param browserAuth - process token and persistent browser-session owner.
+   * @param passwordLogin - optional username/password login offered to unauthenticated browsers.
    */
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    private readonly passwordLogin?: PasswordLogin,
   ) {
     super(ctx, 'connection')
     this.owner = ctx
@@ -191,7 +195,75 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * Authenticate an index request; native TLS listeners mint Secure cookies.
    */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
-    return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')
+    const login = this.passwordLogin
+    if (login !== undefined && !this.isTrusted(request)) {
+      // Say why instead of the generic token message: the usual cause is a
+      // browser-visible address (NAT, proxy, DNS name) missing from trustedHosts.
+      const raw = request.headers instanceof Headers ? request.headers.get('host') : request.headers.host
+      const shown = typeof raw === 'string' ? raw : '(none)'
+      console.warn(`dsh web: refused browser request for Host ${JSON.stringify(shown)}: not loopback, the bind address, or a trustedHosts entry`)
+      response.writeHead(403, { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' })
+      response.end(`dsh web: Host ${shown} is not trusted; add it to trustedHosts (--trusted-host) on the server.\n`)
+      return false
+    }
+    return this.browserAuth.authorizeIndex(
+      request,
+      response,
+      this.ctx.get('webServer')?.protocol === 'https:',
+      login === undefined ? undefined : () => login.page(),
+    )
+  }
+
+  /**
+   * Answer `POST /login`: the Host/Origin fence applies first, then the
+   * submitted credentials are checked against the configured login.
+   * @param request - the form submission.
+   * @param response - response owned to completion.
+   */
+  async authorizeLogin(request: IncomingMessage, response: NodeServerResponse): Promise<void> {
+    const login = this.passwordLogin
+    if (login === undefined || this.disposed) {
+      response.writeHead(404).end()
+      return
+    }
+    if (!this.isTrusted(request)) {
+      const { host, origin } = request.headers
+      console.warn(`dsh web: refused login for Host ${JSON.stringify(host)} Origin ${JSON.stringify(origin)}: Host not trusted or Origin is not this authority`)
+      response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+        .end('dsh web: login refused: the browser Host or Origin is not trusted by this server.\n')
+      return
+    }
+    if (request.method !== 'POST') {
+      response.writeHead(405, { allow: 'POST' }).end()
+      return
+    }
+    const form = await readLoginForm(request)
+    const page = (status: number, message: string): void => {
+      response.writeHead(status, {
+        'cache-control': 'no-store',
+        'content-type': 'text/html; charset=utf-8',
+        'referrer-policy': 'same-origin',
+        'x-frame-options': 'DENY',
+      }).end(login.page(message))
+    }
+    if (form === undefined) {
+      page(400, 'Malformed login request.')
+      return
+    }
+    /* v8 ignore next -- node:http always supplies the remote address of a live socket. */
+    const client = request.socket.remoteAddress ?? 'unknown'
+    const result = login.attempt(client, form.get('username') ?? '', form.get('password') ?? '')
+    if (result === 'locked') {
+      page(429, 'Too many failed attempts. Try again later.')
+      return
+    }
+    if (result === 'invalid') {
+      page(401, 'Incorrect username or password.')
+      return
+    }
+    if (!this.browserAuth.completeLogin(request, response, this.owner.get('webServer')?.protocol === 'https:')) {
+      response.writeHead(400).end()
+    }
   }
 
   /** Add this process's launch token to the clean application URL. */

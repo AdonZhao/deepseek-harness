@@ -11,7 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { internals, provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, WEB_STARTUP_SERVICE, type WebStartupValues } from '../src/startup.ts'
 
 /** What one fixture boot observed. */
@@ -116,13 +116,36 @@ describe('web command-line provider', () => {
   })
 
   // The webserver suite owns the wildcard spellings; the CLI only has to
-  // refuse them by address value before any consumer activates.
-  it.each(['0.0.0.0', '::ffff:0.0.0.0'])('rejects wildcard --host %s before activating consumers', async (host) => {
+  // refuse them by address value unless a password login is configured.
+  it.each(['0.0.0.0', '::ffff:0.0.0.0'])('rejects wildcard --host %s without --auth-user', async (host) => {
     const { values, observed } = await bootProvider(['--host', host])
-    expect(observed.out).toContain(`error: --host ${host} is an unspecified (wildcard) address`)
+    expect(observed.out).toContain(`error: --host ${host} binds every interface`)
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([1])
+  })
+
+  it('accepts a wildcard --host with --auth-user and the password environment variable', async () => {
+    vi.stubEnv('DSH_WEB_PASSWORD', 'correct horse')
+    try {
+      const { values, observed } = await bootProvider(['--host', '0.0.0.0', '--auth-user', 'admin'])
+      expect(values).toMatchObject({ host: '0.0.0.0', login: { username: 'admin', password: 'correct horse' } })
+      expect(observed.exits).toEqual([])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('rejects --auth-user without a usable password', async () => {
+    vi.stubEnv('DSH_WEB_PASSWORD', 'short')
+    try {
+      const { values, observed } = await bootProvider(['--auth-user', 'admin'])
+      expect(observed.out).toContain('DSH_WEB_PASSWORD')
+      expect(values).toBeUndefined()
+      expect(observed.exits).toEqual([1])
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('leaves deployment values to each consumer when flags omit them', async () => {

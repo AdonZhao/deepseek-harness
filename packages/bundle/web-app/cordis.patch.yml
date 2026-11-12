@@ -179,7 +179,7 @@
     # by the web-runtime row below through the fallback seat. Routing and
     # browser-facing asset paths do not depend on the advertised URL, which the
     # web-runtime row owns; Connection reads trust authorities from webStartup.
-    # This row rejects wildcard binds.
+    # A wildcard bind is only reachable from the CLI together with --auth-user.
     - id: webserver
       name: '@deepseek-ai/dsh-host-webserver'
       inject: [webStartup]
@@ -243,6 +243,8 @@
         # deployment values, for example: ['app.internal', ...ctx.webStartup.trustedHosts].
         # The listener's bind IP is accepted separately from this list.
         trustedHosts: !!js ctx.webStartup.trustedHosts
+        # --auth-user with DSH_WEB_PASSWORD enables the browser login form.
+        login: !!js ctx.webStartup.login
 
     # Raw Blob and ReadableStream uploads run independently of Connection's
     # RPC and generation service.

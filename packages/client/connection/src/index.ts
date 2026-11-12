@@ -11,6 +11,7 @@ import { CONNECT_PATH } from './connect-protocol.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
 import { assertTrustedAuthority } from './api-request-trust.ts'
 import { BrowserAuth } from './browser-auth.ts'
+import { LOGIN_PATH, PasswordLogin, type PasswordLoginConfig } from './password-login.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { ConnectionRecoveryConfigSchema, resolveConnectionConfig, type ConnectionRecoveryConfig } from './recovery-config.ts'
 
@@ -54,6 +55,7 @@ export {
 export { HostConnectionService } from './rpc-host.ts'
 
 export { API_PATH } from './api-path.ts'
+export { LOGIN_PATH, type PasswordLoginConfig } from './password-login.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'client-connection'
@@ -107,6 +109,12 @@ export interface ConnectionConfig {
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
+  /**
+   * Optional username/password login. When set, browsers without a session
+   * cookie get a login form and `POST /login` mints the session cookie; the
+   * printed launch-token URL keeps working.
+   */
+  login?: PasswordLoginConfig
 }
 
 export const Config: z<ConnectionConfig> = z.object({
@@ -114,6 +122,10 @@ export const Config: z<ConnectionConfig> = z.object({
   trustedHosts: z.array(String).default([]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  login: z.object({
+    username: z.string().required(),
+    password: z.string().required(),
+  }).default(undefined as never),
 })
 
 /**
@@ -133,10 +145,14 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
+  // Schemastery passes an explicit `login: null` through; only a real object enables login.
+  const loginConfig = config?.login ?? undefined
+  const passwordLogin = loginConfig === undefined ? undefined : new PasswordLogin(loginConfig)
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
     await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    passwordLogin,
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
@@ -162,6 +178,12 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       kind: 'exact', path: CONNECT_PATH,
       handler: (req, res) => { connection.authorizeConnect(req, res) },
     }), 'client-connection: /connect route')
+    if (passwordLogin !== undefined) {
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact', path: LOGIN_PATH,
+        handler: (req, res) => connection.authorizeLogin(req, res),
+      }), 'client-connection: /login route')
+    }
   })
   ctx.inject(['attachments'], (attachmentCtx) => {
     assertImageBodyCapacity(attachmentCtx, maxRequestBodyBytes)

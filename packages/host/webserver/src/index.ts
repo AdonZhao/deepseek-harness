@@ -101,8 +101,8 @@ export interface Config {
    * literal (any address in 127/8, `::1`, or a mapped form of either) keeps the
    * server on this machine; any other literal serves the network that address
    * belongs to, over plain HTTP unless `tls` is set. The unspecified address —
-   * IPv4 any, IPv6 any, and the IPv4-mapped forms of IPv4 any — is rejected at
-   * load: it would expose the port on every interface at once.
+   * IPv4 any, IPv6 any, and the IPv4-mapped forms of IPv4 any — serves every
+   * interface at once; the Web command line only allows it with a password login.
    */
   host: string
   /** Listen port; zero requests an OS-assigned port. */
@@ -359,9 +359,8 @@ export class WebServer extends Service {
     host: z.transform(z.string(), (value) => {
       const parsed = parseIpLiteral(value)
       if (parsed === undefined) throw notLiteralError(value)
-      if (isWildcardAddress(parsed)) {
-        throw new Error(`webserver: host ${JSON.stringify(value)} is an unspecified (wildcard) address, which is not supported: binding every interface would expose remote code execution to the network; bind one concrete IPv4 or IPv6 address of a local interface instead`)
-      }
+      // A wildcard bind is accepted here; the web-app command line only
+      // permits it together with a password login.
       return value
     }).required(),
     port: z.natural().max(65535).required(),

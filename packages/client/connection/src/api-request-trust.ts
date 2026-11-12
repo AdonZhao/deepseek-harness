@@ -12,6 +12,7 @@
  * the webserver config; this fence never establishes identity.
  */
 
+import { networkInterfaces } from 'node:os'
 import { isLoopbackHostname } from './loopback-hostname.ts'
 import type { ConnectionTrustRequest } from './rpc.ts'
 
@@ -107,7 +108,27 @@ function isBindAddressAuthority(hostUrl: URL, bindHost: string | undefined): boo
   const zoneAt = bindHost.indexOf('%')
   const address = zoneAt === -1 ? bindHost : bindHost.slice(0, zoneAt)
   const bindUrl = parseAuthority(address.includes(':') ? `[${address}]` : address)
-  return bindUrl !== undefined && bindUrl.hostname === hostUrl.hostname
+  if (bindUrl === undefined) return false
+  if (bindUrl.hostname === hostUrl.hostname) return true
+  // A wildcard listener is bound to every interface address: accept each of
+  // their literals as Host, exactly as a single-address bind accepts its own.
+  return isWildcardHostname(bindUrl.hostname) && localInterfaceHostnames().has(hostUrl.hostname)
+}
+
+function isWildcardHostname(hostname: string): boolean {
+  return hostname === '0.0.0.0' || hostname === '[::]' || hostname === '[::ffff:0:0]'
+}
+
+/** URL-normalized hostnames of every local interface address (IPv6 bracketed). */
+function localInterfaceHostnames(): Set<string> {
+  const names = new Set<string>()
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      const parsed = parseAuthority(entry.family === 'IPv6' ? `[${entry.address}]` : entry.address)
+      if (parsed !== undefined) names.add(parsed.hostname)
+    }
+  }
+  return names
 }
 
 /**
