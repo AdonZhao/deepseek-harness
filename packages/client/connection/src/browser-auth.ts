@@ -258,9 +258,16 @@ export class BrowserAuth {
    * minted cookie carries `Secure` when it does. Only that listener's own
    * protocol decides, never a `publicUrl` announcement or a forwarded header:
    * those describe a hop this process does not terminate.
+   * @param loginPage - when password login is enabled, renders the document an
+   * unauthenticated tokenless request receives instead of the plain 401.
    * @returns true only when the caller may serve index.html.
    */
-  authorizeIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse, secure = false): boolean {
+  authorizeIndex(
+    req: ConnectionIndexRequest,
+    res: ConnectionIndexResponse,
+    secure = false,
+    loginPage?: () => string,
+  ): boolean {
     /* v8 ignore next -- node:http always supplies url on server requests. */
     const url = new URL(req.url ?? '/', 'http://dsh.invalid')
     const tokens = url.searchParams.getAll(TOKEN_QUERY)
@@ -268,23 +275,7 @@ export class BrowserAuth {
       const authority = requestAudience(req.headers, secure)
       if (req.method === 'GET' && url.pathname === '/' && tokens.length === 1
         && authority !== undefined && tokenMatches(tokens.join(''), this.launchToken)) {
-        const issuedAt = Date.now()
-        const expiresAt = issuedAt + this.maxAgeMilliseconds
-        const value = encodeCookie({
-          version: COOKIE_PAYLOAD_VERSION,
-          authority,
-          issuedAt,
-          expiresAt,
-        }, this.secret)
-        res.writeHead(303, {
-          'cache-control': 'no-store',
-          'location': './',
-          'referrer-policy': 'no-referrer',
-          'set-cookie': sessionCookie(
-            cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000), secure,
-          ),
-        })
-        res.end()
+        this.writeSessionRedirect(res, authority, secure)
         return false
       }
       if (req.method === 'GET' && url.pathname === '/' && this.isAuthenticated(req, secure)) {
@@ -296,12 +287,53 @@ export class BrowserAuth {
         res.end()
         return false
       }
-      this.writeUnauthorized(req, res)
+      // A stale or mistyped launch token falls back to the login form when one is offered.
+      if (loginPage !== undefined) this.writeLoginPage(req, res, loginPage)
+      else this.writeUnauthorized(req, res)
       return false
     }
     if (this.isAuthenticated(req, secure)) return true
+    if (loginPage !== undefined) {
+      this.writeLoginPage(req, res, loginPage)
+      return false
+    }
     this.writeUnauthorized(req, res)
     return false
+  }
+
+  /**
+   * Mint the browser-session cookie after a successful password login and
+   * redirect to the directory-relative application root.
+   * @param req - the login request; only its Host header is read.
+   * @param res - response owned to completion.
+   * @param secure - whether the receiving listener serves TLS.
+   * @returns false when the request carries no usable Host.
+   */
+  completeLogin(req: ConnectionIndexRequest, res: ConnectionIndexResponse, secure = false): boolean {
+    const authority = requestAudience(req.headers, secure)
+    if (authority === undefined) return false
+    this.writeSessionRedirect(res, authority, secure)
+    return true
+  }
+
+  private writeSessionRedirect(res: ConnectionIndexResponse, authority: string, secure: boolean): void {
+    const issuedAt = Date.now()
+    const expiresAt = issuedAt + this.maxAgeMilliseconds
+    const value = encodeCookie({
+      version: COOKIE_PAYLOAD_VERSION,
+      authority,
+      issuedAt,
+      expiresAt,
+    }, this.secret)
+    res.writeHead(303, {
+      'cache-control': 'no-store',
+      'location': './',
+      'referrer-policy': 'no-referrer',
+      'set-cookie': sessionCookie(
+        cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000), secure,
+      ),
+    })
+    res.end()
   }
 
   /**
@@ -380,6 +412,18 @@ export class BrowserAuth {
     if (payload.issuedAt > now || payload.expiresAt <= now || payload.expiresAt <= payload.issuedAt
       || payload.expiresAt - payload.issuedAt > this.maxAgeMilliseconds) return undefined
     return payload
+  }
+
+  private writeLoginPage(req: ConnectionIndexRequest, res: ConnectionIndexResponse, loginPage: () => string): void {
+    res.writeHead(401, {
+      'cache-control': 'no-store',
+      'content-type': 'text/html; charset=utf-8',
+      // Not no-referrer: under that policy browsers submit the form with
+      // `Origin: null`, which the Host/Origin fence refuses.
+      'referrer-policy': 'same-origin',
+      'x-frame-options': 'DENY',
+    })
+    res.end(req.method === 'HEAD' ? undefined : loginPage())
   }
 
   private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {

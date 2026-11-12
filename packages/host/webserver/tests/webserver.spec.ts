@@ -23,7 +23,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import HttpServer, {
-  bindUrlHost, isLoopbackHost, normalizeBindAddress, renderIndexInjections, type TlsConfig, type WebResource, type WebRoute,
+  bindUrlHost, isLoopbackHost, isWildcardHost, normalizeBindAddress, renderIndexInjections, type TlsConfig, type WebResource, type WebRoute,
 } from '../src/index.ts'
 import { materializeTlsFixture, type TlsFixture } from './tls-fixture.ts'
 
@@ -253,32 +253,21 @@ describe('real Loader composition', () => {
     }
   })
 
-  it('rejects every wildcard spelling by address value, not by text', () => {
-    // Every spelling node:net accepts that parses to the unspecified address:
-    // IPv4 any, IPv6 any in long and short forms, IPv4-compatible, and the
-    // IPv4-mapped forms of IPv4 any, with or without a zone.
+  it('accepts every wildcard spelling and classifies it by address value', () => {
+    // The web command line gates wildcard binds behind a password login; the
+    // carrier itself accepts every spelling node:net reads as the unspecified address.
     for (const host of [
       '0.0.0.0', '::', '::0', '0000::', '0::', '0:0:0:0:0:0:0:0', '::0.0.0.0', '::0.0.0.0%lo', '::%lo',
       '::ffff:0.0.0.0', '::ffff:0:0', '::ffff:0000:0000', '0:0:0:0:0:ffff:0:0',
       '0:0:0:0:0:ffff:0.0.0.0', '::ffff:0.0.0.0%eth0',
     ]) {
-      expect(() => HttpServer.Config({ host, port: 0 })).toThrow(
-        /is an unspecified \(wildcard\) address, which is not supported/,
-      )
+      expect(HttpServer.Config({ host, port: 0 }).host).toBe(host)
+      expect(isWildcardHost(host)).toBe(true)
     }
     for (const host of ['localhost', 'example.com', '*', '[::]', '[fd00::1]', '10.1.2.3/8']) {
       expect(() => HttpServer.Config({ host, port: 0 }))
         .toThrow(/is not a concrete IPv4 or IPv6 address literal/)
     }
-  })
-
-  it('denies the IPv4-mapped wildcard through the real plugin load, not only the predicate', async () => {
-    // The Loader is nontransactional: a rejected config leaves a FAILED fiber
-    // whose await carries the schema error rather than rejecting loader.await().
-    const denied = await loadComposition(0, false, '::ffff:0.0.0.0')
-    const fiber = webserverFiber(denied)
-    expect(fiber?.state).toBe(FiberState.FAILED)
-    await expect(fiber?.await()).rejects.toThrow(/is an unspecified \(wildcard\) address/)
   })
 
   it('classifies loopback bind addresses from the parsed value, including mapped and zone forms', () => {

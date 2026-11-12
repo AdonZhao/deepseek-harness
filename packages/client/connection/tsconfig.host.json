@@ -15,6 +15,7 @@
     "src/http-bridge.ts",
     "src/index.ts",
     "src/loopback-hostname.ts",
+    "src/password-login.ts",
     "src/peer.ts",
     "src/recovery-config.ts",
     "src/rpc-host.ts",
