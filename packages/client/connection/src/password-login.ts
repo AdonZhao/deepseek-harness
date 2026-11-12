@@ -77,6 +77,7 @@ export class PasswordLogin {
    * @param client - remote address used for the failure budget.
    * @param username - submitted user name.
    * @param password - submitted password.
+   * @returns the verdict and, on success, the redirect the caller should send.
    */
   attempt(client: string, username: string, password: string): LoginAttempt {
     const now = Date.now()
@@ -99,6 +100,7 @@ export class PasswordLogin {
    * Render the self-contained login document. The form posts to the
    * directory-relative `login`, so a prefix-stripping proxy mount still works.
    * @param error - message shown above the form.
+   * @returns the login document as HTML.
    */
   page(error?: string): string {
     const message = error === undefined ? '' : `<p class="error">${escapeHtml(error)}</p>`
