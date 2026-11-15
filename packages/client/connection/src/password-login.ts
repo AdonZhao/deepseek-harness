@@ -21,7 +21,9 @@ const FAILURE_WINDOW_MILLISECONDS = 15 * 60 * 1000
 
 /** Login credentials as configured; the password never leaves this process. */
 export interface PasswordLoginConfig {
+  /** Username the login form must submit; compared in constant time. */
   username: string
+  /** Password the login form must submit; compared in constant time against a digest. */
   password: string
 }
 
